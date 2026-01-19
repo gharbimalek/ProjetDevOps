@@ -11,6 +11,21 @@ jobs:
     name: Build, Analyze and Docker Push
     runs-on: ubuntu-latest
 
+    # Création d'une base de données MySQL pour que les tests Maven ne plantent pas
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: projetmpisi_db
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
     steps:
       # 1. Récupérer le code
       - name: Checkout code
@@ -18,7 +33,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 2. Configurer Java (Adapté à votre version Java 23/21)
+      # 2. Configurer Java 21
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -26,20 +41,25 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      # 3. Compiler et Tester (Génère JaCoCo)
+      # 3. Compiler et Tester (avec connexion à la DB de GitHub)
       - name: Build and Test with Maven
         run: mvn clean verify
-
-      # 4. Analyse SonarCloud (Si vous avez le SONAR_TOKEN)
-      - name: SonarCloud Scan
-        if: env.SONAR_TOKEN != ''
         env:
+          SPRING_DATASOURCE_URL: jdbc:mysql://localhost:3306/projetmpisi_db
+          SPRING_DATASOURCE_USERNAME: root
+          SPRING_DATASOURCE_PASSWORD: ""
+
+      # 4. Analyse SonarCloud
+      - name: SonarCloud Scan
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: mvn sonar:sonar -Dsonar.token=$SONAR_TOKEN
+        run: mvn sonar:sonar -Dsonar.token=${{ secrets.SONAR_TOKEN }}
 
       # 5. Connexion à Docker Hub
       - name: Login to Docker Hub
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && success()
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -47,14 +67,14 @@ jobs:
 
       # 6. Build et Push de l'image Docker
       - name: Build and push Docker image
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && success()
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/projetmpisi-app:latest
 
-      # 7. Upload des rapports (Optionnel)
+      # 7. Sauvegarde des rapports de tests et couverture
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
